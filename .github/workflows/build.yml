@@ -1,0 +1,63 @@
+name: Build Executables
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build Windows executable
+        run: python -m PyInstaller --onefile --windowed --name "TwilioManager" twilio_gui.py
+      
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v3
+        with:
+          name: TwilioManager-Windows
+          path: dist/TwilioManager.exe
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      
+      - name: Build Mac application
+        run: python -m PyInstaller --onefile --windowed --name "TwilioManager" twilio_gui.py
+      
+      - name: Create DMG (optional)
+        run: |
+          mkdir -p dist/dmg
+          cp -r dist/TwilioManager.app dist/dmg/
+          hdiutil create -volname "Twilio Manager" -srcfolder dist/dmg -ov -format UDZO dist/TwilioManager.dmg
+      
+      - name: Upload Mac application
+        uses: actions/upload-artifact@v3
+        with:
+          name: TwilioManager-Mac
+          path: dist/TwilioManager.dmg
