@@ -9,10 +9,10 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       
@@ -26,7 +26,7 @@ jobs:
         run: python -m PyInstaller --onefile --windowed --name "TwilioManager" twilio_gui.py
       
       - name: Upload Windows executable
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: TwilioManager-Windows
           path: dist/TwilioManager.exe
@@ -34,10 +34,10 @@ jobs:
   build-mac:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       
@@ -57,7 +57,7 @@ jobs:
           hdiutil create -volname "Twilio Manager" -srcfolder dist/dmg -ov -format UDZO dist/TwilioManager.dmg
       
       - name: Upload Mac application
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: TwilioManager-Mac
           path: dist/TwilioManager.dmg
