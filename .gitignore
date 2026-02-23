@@ -11,6 +11,9 @@ build/
 dist/
 *.egg-info/
 
+# PyInstaller
+*.spec
+
 # Credentials - DO NOT COMMIT
 .twilio_gui_config.json
 
