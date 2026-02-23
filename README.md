@@ -21,6 +21,12 @@ Cross-platform Python GUI for managing and analyzing Twilio call and message log
 
 ## Installation
 
+### For End Users
+
+See [INSTALLATION.md](INSTALLATION.md) for detailed installation instructions including how to handle security warnings on Windows and Mac.
+
+### For Developers
+
 ```bash
 pip install -r requirements.txt
 ```
