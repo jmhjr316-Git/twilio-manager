@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox, filedialog
 import json
 import os
 import csv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import base64
 from typing import List, Dict
@@ -141,11 +141,19 @@ class TwilioAPI:
             
             data = response.json()
             for call in data.get('calls', []):
+                # Convert UTC timestamp to local time
+                start_time_utc = call['start_time']
+                try:
+                    dt = datetime.strptime(start_time_utc, '%a, %d %b %Y %H:%M:%S %z')
+                    local_time = dt.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    local_time = start_time_utc
+                
                 all_calls.append({
                     'direction': 'Outbound' if call['direction'].startswith('outbound') else 'Inbound',
                     'from': call['from'],
                     'to': call['to'],
-                    'start_time': call['start_time'],
+                    'start_time': local_time,
                     'duration': call['duration'],
                     'status': call['status'],
                     'sid': call['sid'],
@@ -206,11 +214,19 @@ class TwilioAPI:
             
             data = response.json()
             for msg in data.get('messages', []):
+                # Convert UTC timestamp to local time
+                date_sent_utc = msg['date_sent']
+                try:
+                    dt = datetime.strptime(date_sent_utc, '%a, %d %b %Y %H:%M:%S %z')
+                    local_time = dt.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    local_time = date_sent_utc
+                
                 all_messages.append({
                     'direction': 'Outbound' if msg['direction'] == 'outbound-api' else 'Inbound',
                     'from': msg['from'],
                     'to': msg['to'],
-                    'date_sent': msg['date_sent'],
+                    'date_sent': local_time,
                     'body': msg['body'][:50] + '...' if len(msg['body']) > 50 else msg['body'],
                     'status': msg['status'],
                     'sid': msg['sid'],
