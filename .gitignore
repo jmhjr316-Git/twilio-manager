@@ -17,6 +17,9 @@ dist/
 # Credentials - DO NOT COMMIT
 .twilio_gui_config.json
 
+# Developer notes - Local only
+DEVELOPER.md
+
 # IDE
 .vscode/
 .idea/
