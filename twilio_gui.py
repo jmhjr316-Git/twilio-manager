@@ -279,8 +279,11 @@ class TwilioGUI:
         self.sort_reverse = {}  # Track sort direction per column
         self.tree_data = {}  # Store hidden data like sort_key for each tree item
         self.all_data = []  # Store all fetched data for filtering
+        self.last_search = {}  # Store last search parameters
+        self.search_history = []  # Store recent searches
         
         self.setup_ui()
+        self.load_search_history()
     
     def setup_ui(self):
         # Create notebook for tabs
@@ -328,6 +331,7 @@ class TwilioGUI:
         ttk.Label(account_frame, text="Select Account:").grid(row=0, column=0, padx=5)
         self.account_combo = ttk.Combobox(account_frame, textvariable=self.current_account, width=20)
         self.account_combo.grid(row=0, column=1, padx=5)
+        self.account_combo.bind('<<ComboboxSelected>>', self.on_account_changed)
         
         ttk.Button(account_frame, text="Add Account", command=self.add_account_dialog).grid(row=0, column=2, padx=5)
         ttk.Button(account_frame, text="Delete", command=self.delete_account).grid(row=0, column=3, padx=5)
@@ -343,7 +347,7 @@ class TwilioGUI:
         ttk.Radiobutton(mode_frame, text="Messages", variable=self.data_mode, value="messages").pack(side=tk.LEFT, padx=5)
         
         ttk.Label(query_frame, text="Phone Number:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.phone_entry = ttk.Entry(query_frame, width=20)
+        self.phone_entry = ttk.Combobox(query_frame, width=20)
         self.phone_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
         ttk.Label(query_frame, text="(e.g., +17246134570)").grid(row=1, column=2, sticky=tk.W)
         
@@ -358,17 +362,27 @@ class TwilioGUI:
         self.end_date.set_date(datetime.now())
         
         ttk.Button(query_frame, text="Fetch Data", command=self.fetch_data).grid(row=4, column=1, pady=10)
+        self.refresh_button = ttk.Button(query_frame, text="Refresh", command=self.refresh_data, state='disabled')
+        self.refresh_button.grid(row=4, column=0, pady=10, padx=5, sticky=tk.E)
         ttk.Button(query_frame, text="Export CSV", command=self.export_csv).grid(row=4, column=2, pady=10, padx=5)
         
         # Search/Filter Section
         filter_frame = ttk.Frame(main_frame)
         filter_frame.grid(row=1, column=3, sticky=(tk.W, tk.E, tk.N), padx=(10, 0))
         
-        ttk.Label(filter_frame, text="Filter:").pack()
+        filter_label = ttk.Label(filter_frame, text="Filter Results:")
+        filter_label.pack()
+        self.create_tooltip(filter_label, "Type to search across all columns\n(phone numbers, status, direction, etc.)")
+        
         self.filter_entry = ttk.Entry(filter_frame, width=20)
         self.filter_entry.pack(pady=5)
         self.filter_entry.bind('<KeyRelease>', self.filter_results)
+        self.create_tooltip(self.filter_entry, "Search is case-insensitive and searches all visible fields")
+        
         ttk.Button(filter_frame, text="Clear Filter", command=self.clear_filter).pack()
+        clear_history_btn = ttk.Button(filter_frame, text="Clear History", command=self.clear_search_history)
+        clear_history_btn.pack(pady=(10, 0))
+        self.create_tooltip(clear_history_btn, "Remove all saved phone numbers\nfrom the search history dropdown")
         
         # Results Section
         results_frame = ttk.LabelFrame(main_frame, text="Results (Double-click row for events)", padding="5")
@@ -502,6 +516,82 @@ class TwilioGUI:
         # Status
         self.config_status_label = ttk.Label(main_frame, text="Ready", relief=tk.SUNKEN)
         self.config_status_label.grid(row=2, column=0, sticky=(tk.W, tk.E))
+    
+    def create_tooltip(self, widget, text):
+        """Create a tooltip for a widget"""
+        def on_enter(event):
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+            label = ttk.Label(tooltip, text=text, background="#ffffe0", relief=tk.SOLID, borderwidth=1, padding=5)
+            label.pack()
+            widget.tooltip = tooltip
+        
+        def on_leave(event):
+            if hasattr(widget, 'tooltip'):
+                widget.tooltip.destroy()
+                del widget.tooltip
+        
+        widget.bind('<Enter>', on_enter)
+        widget.bind('<Leave>', on_leave)
+    
+    def on_account_changed(self, event=None):
+        """Disable refresh when account changes"""
+        if hasattr(self, 'last_search') and self.last_search:
+            # Check if account changed from last search
+            if self.current_account.get() != self.last_search.get('account', ''):
+                self.refresh_button.config(state='disabled')
+    
+    def load_search_history(self):
+        """Load search history from config file"""
+        history_path = Path.home() / '.twilio_gui_history.json'
+        if history_path.exists():
+            try:
+                with open(history_path, 'r') as f:
+                    self.search_history = json.load(f)
+            except:
+                self.search_history = []
+        self.update_phone_dropdown()
+    
+    def save_search_history(self):
+        """Save search history to config file"""
+        history_path = Path.home() / '.twilio_gui_history.json'
+        try:
+            with open(history_path, 'w') as f:
+                json.dump(self.search_history[-20:], f)  # Keep last 20 searches
+        except:
+            pass
+    
+    def update_phone_dropdown(self):
+        """Update phone number dropdown with history"""
+        if hasattr(self, 'phone_entry'):
+            self.phone_entry['values'] = self.search_history
+    
+    def clear_search_history(self):
+        """Clear search history"""
+        if messagebox.askyesno("Confirm", "Clear all search history?"):
+            self.search_history = []
+            self.save_search_history()
+            self.update_phone_dropdown()
+            self.phone_entry.set('')
+    
+    def refresh_data(self):
+        """Refresh data using last search parameters"""
+        if not self.last_search:
+            return  # Button should be disabled, but just in case
+        
+        # Restore last search parameters
+        self.current_account.set(self.last_search.get('account', ''))
+        self.data_mode.set(self.last_search.get('mode', 'calls'))
+        self.phone_entry.set(self.last_search.get('phone', ''))
+        
+        if 'start_date' in self.last_search:
+            self.start_date.set_date(datetime.strptime(self.last_search['start_date'], '%Y-%m-%d'))
+        if 'end_date' in self.last_search:
+            self.end_date.set_date(datetime.strptime(self.last_search['end_date'], '%Y-%m-%d'))
+        
+        # Execute search
+        self.fetch_data()
     
     def refresh_accounts(self):
         accounts = list(self.config.accounts.keys())
@@ -700,6 +790,24 @@ class TwilioGUI:
         
         mode = self.data_mode.get()
         self.setup_tree_columns(mode)
+        
+        # Save search parameters
+        self.last_search = {
+            'account': account_name,
+            'mode': mode,
+            'phone': phone,
+            'start_date': start,
+            'end_date': self.end_date.get_date().strftime('%Y-%m-%d')
+        }
+        
+        # Add to search history if not already there
+        if phone not in self.search_history:
+            self.search_history.append(phone)
+            self.save_search_history()
+            self.update_phone_dropdown()
+        
+        # Enable refresh button
+        self.refresh_button.config(state='normal')
         
         for item in self.tree.get_children():
             self.tree.delete(item)
