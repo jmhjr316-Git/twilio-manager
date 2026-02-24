@@ -249,7 +249,7 @@ class TwilioAPI:
                 body_preview = body_text[:50] + '...' if len(body_text) > 50 else body_text
                 
                 all_messages.append({
-                    'direction': 'Outbound' if msg['direction'] == 'outbound-api' else 'Inbound',
+                    'direction': msg['direction'],  # Use actual direction from API
                     'from': msg['from'],
                     'to': msg['to'],
                     'date_sent': local_time,
@@ -402,6 +402,10 @@ class TwilioGUI:
         results_frame.rowconfigure(0, weight=1)
         
         self.setup_tree_columns("calls")
+        
+        # Configure row colors for error states
+        self.tree.tag_configure('error', background='#ffcccc')  # Light red
+        self.tree.tag_configure('warning', background='#fff4cc')  # Light yellow
         
         # Bind double-click to show events
         self.tree.bind('<Double-Button-1>', self.show_call_message_events)
@@ -669,6 +673,21 @@ class TwilioGUI:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_tree_column(c))
             self.tree.column(col, width=150)
     
+    def get_status_tag(self, status, error_code=None):
+        """Determine row color tag based on status"""
+        status_lower = status.lower() if status else ''
+        
+        # No color for success
+        if status_lower in ['delivered', 'completed', 'received']:
+            return ''
+        
+        # Red for errors
+        if error_code or status_lower in ['failed', 'canceled', 'busy', 'no-answer', 'undelivered']:
+            return 'error'
+        
+        # Yellow for all other statuses
+        return 'warning'
+    
     def show_context_menu(self, event):
         """Show right-click context menu"""
         item = self.tree.identify_row(event.y)
@@ -714,15 +733,17 @@ class TwilioGUI:
             searchable = ' '.join(str(v).lower() for v in item.values() if v)
             if search_text in searchable:
                 if mode == "calls":
+                    tag = self.get_status_tag(item['status'])
                     item_id = self.tree.insert('', tk.END, values=(
                         item['direction'], item['from'], item['to'],
                         item['start_time'], item['duration'], item['status'], item['sid']
-                    ))
+                    ), tags=(tag,))
                 else:
+                    tag = self.get_status_tag(item['status'], item.get('error_code'))
                     item_id = self.tree.insert('', tk.END, values=(
                         item['direction'], item['from'], item['to'],
                         item['date_sent'], item['body'], item['status'], item['sid']
-                    ))
+                    ), tags=(tag,))
                 self.tree_data[item_id] = {'sort_key': item.get('sort_key', 0)}
         
         count = len(self.tree.get_children())
@@ -840,19 +861,21 @@ class TwilioGUI:
                 data = api.get_calls(phone, start, end)
                 self.all_data = data  # Store for filtering
                 for item in data:
+                    tag = self.get_status_tag(item['status'])
                     item_id = self.tree.insert('', tk.END, values=(
                         item['direction'], item['from'], item['to'],
                         item['start_time'], item['duration'], item['status'], item['sid']
-                    ))
+                    ), tags=(tag,))
                     self.tree_data[item_id] = {'sort_key': item.get('sort_key', 0)}
             else:
                 data = api.get_messages(phone, start, end)
                 self.all_data = data  # Store for filtering
                 for item in data:
+                    tag = self.get_status_tag(item['status'], item.get('error_code'))
                     item_id = self.tree.insert('', tk.END, values=(
                         item['direction'], item['from'], item['to'],
                         item['date_sent'], item['body'], item['status'], item['sid']
-                    ))
+                    ), tags=(tag,))
                     self.tree_data[item_id] = {'sort_key': item.get('sort_key', 0)}
             
             result_text = f"Found {len(data)} {mode}"
