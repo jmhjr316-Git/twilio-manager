@@ -95,7 +95,7 @@ class TwilioAPI:
     def check_number_activity(self, phone_number: str, days: int) -> Dict:
         """Check if a number has any calls or messages in the last X days"""
         cutoff_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-        end_date = datetime.now().strftime('%Y-%m-%d')
+        end_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
         
         # Check for calls TO the number (inbound)
         calls = self._fetch_calls({'To': phone_number, 'StartTime>': cutoff_date, 'StartTime<': end_date})
@@ -122,7 +122,7 @@ class TwilioAPI:
         calls.extend(self._fetch_calls({'From': phone_number, 'StartTime>': start_date, 'StartTime<': end_date}))
         
         # Sort by date
-        calls.sort(key=lambda x: x['start_time'], reverse=True)
+        calls.sort(key=lambda x: x.get('sort_key', 0), reverse=True)
         return calls
     
     def _fetch_calls(self, params: Dict) -> List[Dict]:
@@ -132,22 +132,28 @@ class TwilioAPI:
         all_calls = []
         
         params['PageSize'] = 100
+        first_request = True
         
         while url:
-            response = requests.get(url, auth=auth, params=params if params else None, verify=False)
+            # Only use params on first request; next_page_uri has filters built in
+            response = requests.get(url, auth=auth, params=params if first_request else None, verify=False)
+            first_request = False
+            
             if response.status_code != 200:
                 auth_header = response.request.headers.get('Authorization', 'NOT SENT')
-                raise Exception(f"API Error: {response.status_code}\nURL: {url}\nParams: {params}\nAuth Header: {auth_header}\nAccount SID: {self.account_sid}\nToken Length: {len(self.auth_token)}\nResponse: {response.text}")
+                raise Exception(f"API Error: {response.status_code}\nURL: {url}\nAuth Header: {auth_header}\nAccount SID: {self.account_sid}\nToken Length: {len(self.auth_token)}\nResponse: {response.text}")
             
             data = response.json()
             for call in data.get('calls', []):
-                # Convert UTC timestamp to local time
+                # Convert UTC timestamp to local time, preserving milliseconds
                 start_time_utc = call['start_time']
                 try:
                     dt = datetime.strptime(start_time_utc, '%a, %d %b %Y %H:%M:%S %z')
                     local_time = dt.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+                    sort_key = dt.timestamp()  # Use Unix timestamp for precise sorting
                 except:
                     local_time = start_time_utc
+                    sort_key = 0
                 
                 all_calls.append({
                     'direction': 'Outbound' if call['direction'].startswith('outbound') else 'Inbound',
@@ -157,14 +163,14 @@ class TwilioAPI:
                     'duration': call['duration'],
                     'status': call['status'],
                     'sid': call['sid'],
-                    'events_uri': call.get('subresource_uris', {}).get('events', '')
+                    'events_uri': call.get('subresource_uris', {}).get('events', ''),
+                    'sort_key': sort_key
                 })
             
             # Check for next page
             url = data.get('next_page_uri')
             if url:
                 url = f'https://api.twilio.com{url}'
-            params = None  # Clear params for subsequent requests
         
         return all_calls
     
@@ -196,7 +202,7 @@ class TwilioAPI:
         messages = []
         messages.extend(self._fetch_messages({'To': phone_number, 'DateSent>': start_date, 'DateSent<': end_date}))
         messages.extend(self._fetch_messages({'From': phone_number, 'DateSent>': start_date, 'DateSent<': end_date}))
-        messages.sort(key=lambda x: x['date_sent'], reverse=True)
+        messages.sort(key=lambda x: x.get('sort_key', 0), reverse=True)
         return messages
     
     def _fetch_messages(self, params: Dict) -> List[Dict]:
@@ -205,39 +211,49 @@ class TwilioAPI:
         auth = (self.account_sid, self.auth_token)
         all_messages = []
         params['PageSize'] = 100
+        first_request = True
         
         while url:
-            response = requests.get(url, auth=auth, params=params if params else None, verify=False)
+            # Only use params on first request; next_page_uri has filters built in
+            response = requests.get(url, auth=auth, params=params if first_request else None, verify=False)
+            first_request = False
+            
             if response.status_code != 200:
                 auth_header = response.request.headers.get('Authorization', 'NOT SENT')
-                raise Exception(f"API Error: {response.status_code}\nURL: {url}\nParams: {params}\nAuth Header: {auth_header}\nAccount SID: {self.account_sid}\nToken Length: {len(self.auth_token)}\nResponse: {response.text}")
+                raise Exception(f"API Error: {response.status_code}\nURL: {url}\nAuth Header: {auth_header}\nAccount SID: {self.account_sid}\nToken Length: {len(self.auth_token)}\nResponse: {response.text}")
             
             data = response.json()
             for msg in data.get('messages', []):
-                # Convert UTC timestamp to local time
+                # Convert UTC timestamp to local time, preserving milliseconds
                 date_sent_utc = msg['date_sent']
                 try:
                     dt = datetime.strptime(date_sent_utc, '%a, %d %b %Y %H:%M:%S %z')
                     local_time = dt.astimezone().strftime('%Y-%m-%d %H:%M:%S')
+                    sort_key = dt.timestamp()  # Use Unix timestamp for precise sorting
                 except:
                     local_time = date_sent_utc
+                    sort_key = 0
+                
+                # Replace newlines with space for grid display
+                body_text = msg['body'].replace('\n', ' ').replace('\r', '')
+                body_preview = body_text[:50] + '...' if len(body_text) > 50 else body_text
                 
                 all_messages.append({
                     'direction': 'Outbound' if msg['direction'] == 'outbound-api' else 'Inbound',
                     'from': msg['from'],
                     'to': msg['to'],
                     'date_sent': local_time,
-                    'body': msg['body'][:50] + '...' if len(msg['body']) > 50 else msg['body'],
+                    'body': body_preview,
                     'status': msg['status'],
                     'sid': msg['sid'],
                     'error_code': msg.get('error_code', ''),
-                    'error_message': msg.get('error_message', '')
+                    'error_message': msg.get('error_message', ''),
+                    'sort_key': sort_key
                 })
             
             url = data.get('next_page_uri')
             if url:
                 url = f'https://api.twilio.com{url}'
-            params = None
         
         return all_messages
 
@@ -251,6 +267,7 @@ class TwilioGUI:
         self.current_account = tk.StringVar()
         self.data_mode = tk.StringVar(value="calls")
         self.sort_reverse = {}  # Track sort direction per column
+        self.tree_data = {}  # Store hidden data like sort_key for each tree item
         
         self.setup_ui()
     
@@ -274,12 +291,14 @@ class TwilioGUI:
         config_frame = ttk.Frame(notebook)
         notebook.add(config_frame, text="Number Configuration")
         self.setup_config_tab(config_frame)
+        
+        # Refresh accounts after all tabs are created
+        self.refresh_accounts()
     
     def on_tab_changed(self, event=None):
         """Sync account selection across tabs when switching"""
-        self.refresh_accounts()
         # Auto-load numbers for config tab if account is selected
-        if hasattr(self, 'config_account_combo') and self.config_account_combo.get():
+        if hasattr(self, 'config_account_combo') and self.current_account.get():
             self.load_numbers_for_config()
     
     def setup_lookup_tab(self, parent):
@@ -298,7 +317,6 @@ class TwilioGUI:
         ttk.Label(account_frame, text="Select Account:").grid(row=0, column=0, padx=5)
         self.account_combo = ttk.Combobox(account_frame, textvariable=self.current_account, width=20)
         self.account_combo.grid(row=0, column=1, padx=5)
-        self.refresh_accounts()
         
         ttk.Button(account_frame, text="Add Account", command=self.add_account_dialog).grid(row=0, column=2, padx=5)
         ttk.Button(account_frame, text="Delete", command=self.delete_account).grid(row=0, column=3, padx=5)
@@ -371,9 +389,8 @@ class TwilioGUI:
         account_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         
         ttk.Label(account_frame, text="Select Account:").grid(row=0, column=0, padx=5)
-        self.inactive_account_combo = ttk.Combobox(account_frame, width=20)
+        self.inactive_account_combo = ttk.Combobox(account_frame, textvariable=self.current_account, width=20)
         self.inactive_account_combo.grid(row=0, column=1, padx=5)
-        self.inactive_account_combo.set(self.current_account.get())
         
         ttk.Label(account_frame, text="Inactive Days:").grid(row=0, column=2, padx=5)
         self.inactive_days = ttk.Spinbox(account_frame, from_=1, to=365, width=10)
@@ -421,10 +438,9 @@ class TwilioGUI:
         select_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         
         ttk.Label(select_frame, text="Account:").grid(row=0, column=0, padx=5, pady=5)
-        self.config_account_combo = ttk.Combobox(select_frame, width=20)
+        self.config_account_combo = ttk.Combobox(select_frame, textvariable=self.current_account, width=20)
         self.config_account_combo.grid(row=0, column=1, padx=5, pady=5)
         self.config_account_combo.bind('<<ComboboxSelected>>', self.load_numbers_for_config)
-        self.config_account_combo.set(self.current_account.get())
         
         ttk.Label(select_frame, text="Phone Number:").grid(row=0, column=2, padx=5, pady=5)
         self.config_number_combo = ttk.Combobox(select_frame, width=20)
@@ -457,8 +473,12 @@ class TwilioGUI:
         self.account_combo['values'] = accounts
         if hasattr(self, 'inactive_account_combo'):
             self.inactive_account_combo['values'] = accounts
+            if not self.inactive_account_combo.get() and accounts:
+                self.inactive_account_combo.set(self.current_account.get())
         if hasattr(self, 'config_account_combo'):
             self.config_account_combo['values'] = accounts
+            if not self.config_account_combo.get() and accounts:
+                self.config_account_combo.set(self.current_account.get())
         if accounts and not self.current_account.get():
             self.current_account.set(accounts[0])
     
@@ -529,16 +549,23 @@ class TwilioGUI:
         # Toggle sort direction for this column
         self.sort_reverse[col] = not self.sort_reverse.get(col, False)
         
-        items = [(self.tree.set(item, col), item) for item in self.tree.get_children('')]
+        items = []
+        for item_id in self.tree.get_children(''):
+            # For timestamp columns, use hidden sort_key if available
+            if col in ('Start Time', 'Date Sent') and item_id in self.tree_data:
+                sort_value = self.tree_data[item_id].get('sort_key', 0)
+            else:
+                sort_value = self.tree.set(item_id, col)
+            items.append((sort_value, item_id))
         
-        # Try numeric sort for duration, otherwise alphabetic
+        # Try numeric sort, otherwise alphabetic
         try:
             items.sort(key=lambda x: float(x[0]) if x[0] else 0, reverse=self.sort_reverse[col])
-        except ValueError:
+        except (ValueError, TypeError):
             items.sort(reverse=self.sort_reverse[col])
         
-        for index, (val, item) in enumerate(items):
-            self.tree.move(item, '', index)
+        for index, (val, item_id) in enumerate(items):
+            self.tree.move(item_id, '', index)
         
         # Update column header to show sort direction
         for column in self.tree['columns']:
@@ -570,13 +597,14 @@ class TwilioGUI:
                 return
         
         start = self.start_date.get_date().strftime('%Y-%m-%d')
-        end = self.end_date.get_date().strftime('%Y-%m-%d')
+        end = (self.end_date.get_date() + timedelta(days=1)).strftime('%Y-%m-%d')
         
         mode = self.data_mode.get()
         self.setup_tree_columns(mode)
         
         for item in self.tree.get_children():
             self.tree.delete(item)
+        self.tree_data.clear()
         
         self.status_label.config(text=f"Fetching {mode}...")
         self.root.update()
@@ -604,17 +632,19 @@ class TwilioGUI:
             if mode == "calls":
                 data = api.get_calls(phone, start, end)
                 for item in data:
-                    self.tree.insert('', tk.END, values=(
+                    item_id = self.tree.insert('', tk.END, values=(
                         item['direction'], item['from'], item['to'],
                         item['start_time'], item['duration'], item['status'], item['sid']
                     ))
+                    self.tree_data[item_id] = {'sort_key': item.get('sort_key', 0)}
             else:
                 data = api.get_messages(phone, start, end)
                 for item in data:
-                    self.tree.insert('', tk.END, values=(
+                    item_id = self.tree.insert('', tk.END, values=(
                         item['direction'], item['from'], item['to'],
                         item['date_sent'], item['body'], item['status'], item['sid']
                     ))
+                    self.tree_data[item_id] = {'sort_key': item.get('sort_key', 0)}
             
             result_text = f"Found {len(data)} {mode}"
             if len(data) >= 1000:
