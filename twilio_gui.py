@@ -12,6 +12,7 @@ import certifi
 from urllib.parse import urlencode
 import urllib3
 from tkcalendar import DateEntry
+import time
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -54,18 +55,36 @@ class TwilioAPI:
         self.account_sid = account_sid
         self.auth_token = auth_token
         self.base_url = f'https://api.twilio.com/2010-04-01/Accounts/{account_sid}'
+        self.timeout = 30
+        self.max_retries = 3
+    
+    def _make_request(self, url: str, params: Dict = None) -> requests.Response:
+        """Make HTTP request with timeout and retry logic"""
+        auth = (self.account_sid, self.auth_token)
+        
+        for attempt in range(self.max_retries):
+            try:
+                return requests.get(url, auth=auth, params=params, verify=False, timeout=self.timeout)
+            except requests.exceptions.Timeout:
+                if attempt == self.max_retries - 1:
+                    raise Exception(f"Request timed out after {self.max_retries} attempts")
+                time.sleep(1)
+            except requests.exceptions.ConnectionError:
+                if attempt == self.max_retries - 1:
+                    raise Exception(f"Connection failed after {self.max_retries} attempts. Check your internet connection.")
+                time.sleep(1)
+            except requests.exceptions.RequestException as e:
+                raise Exception(f"Network error: {str(e)}")
     
     def get_incoming_phone_numbers(self) -> List[Dict]:
         """Fetch all phone numbers in the account"""
         url = f'{self.base_url}/IncomingPhoneNumbers.json'
-        auth = (self.account_sid, self.auth_token)
         all_numbers = []
         
         while url:
-            response = requests.get(url, auth=auth, verify=False)
+            response = self._make_request(url)
             if response.status_code != 200:
-                auth_header = response.request.headers.get('Authorization', 'NOT SENT')
-                raise Exception(f"API Error: {response.status_code}\nURL: {url}\nAuth Header: {auth_header}\nAccount SID: {self.account_sid}\nToken Length: {len(self.auth_token)}\nResponse: {response.text}")
+                raise Exception(f"API Error: {response.status_code}\nResponse: {response.text}")
             
             data = response.json()
             for num in data.get('incoming_phone_numbers', []):
@@ -84,11 +103,10 @@ class TwilioAPI:
     def get_phone_number_config(self, phone_number_sid: str) -> Dict:
         """Fetch configuration for a specific phone number"""
         url = f'{self.base_url}/IncomingPhoneNumbers/{phone_number_sid}.json'
-        auth = (self.account_sid, self.auth_token)
         
-        response = requests.get(url, auth=auth, verify=False)
+        response = self._make_request(url)
         if response.status_code != 200:
-            raise Exception(f"API Error: {response.status_code}\nURL: {url}\nResponse: {response.text}")
+            raise Exception(f"API Error: {response.status_code}\nResponse: {response.text}")
         
         return response.json()
     
@@ -128,20 +146,17 @@ class TwilioAPI:
     def _fetch_calls(self, params: Dict) -> List[Dict]:
         """Fetch calls with pagination"""
         url = f'{self.base_url}/Calls.json'
-        auth = (self.account_sid, self.auth_token)
         all_calls = []
         
         params['PageSize'] = 100
         first_request = True
         
         while url:
-            # Only use params on first request; next_page_uri has filters built in
-            response = requests.get(url, auth=auth, params=params if first_request else None, verify=False)
+            response = self._make_request(url, params if first_request else None)
             first_request = False
             
             if response.status_code != 200:
-                auth_header = response.request.headers.get('Authorization', 'NOT SENT')
-                raise Exception(f"API Error: {response.status_code}\nURL: {url}\nAuth Header: {auth_header}\nAccount SID: {self.account_sid}\nToken Length: {len(self.auth_token)}\nResponse: {response.text}")
+                raise Exception(f"API Error: {response.status_code}\nResponse: {response.text}")
             
             data = response.json()
             for call in data.get('calls', []):
@@ -177,11 +192,10 @@ class TwilioAPI:
     def get_call_events(self, call_sid: str) -> List[Dict]:
         """Fetch events for a specific call"""
         url = f'{self.base_url}/Calls/{call_sid}/Events.json'
-        auth = (self.account_sid, self.auth_token)
         
-        response = requests.get(url, auth=auth, verify=False)
+        response = self._make_request(url)
         if response.status_code != 200:
-            raise Exception(f"API Error: {response.status_code}\nURL: {url}\nResponse: {response.text}")
+            raise Exception(f"API Error: {response.status_code}\nResponse: {response.text}")
         
         data = response.json()
         return data.get('events', [])
@@ -189,11 +203,10 @@ class TwilioAPI:
     def get_message_details(self, message_sid: str) -> Dict:
         """Fetch full details for a specific message"""
         url = f'{self.base_url}/Messages/{message_sid}.json'
-        auth = (self.account_sid, self.auth_token)
         
-        response = requests.get(url, auth=auth, verify=False)
+        response = self._make_request(url)
         if response.status_code != 200:
-            raise Exception(f"API Error: {response.status_code}\nURL: {url}\nResponse: {response.text}")
+            raise Exception(f"API Error: {response.status_code}\nResponse: {response.text}")
         
         return response.json()
     
@@ -208,19 +221,16 @@ class TwilioAPI:
     def _fetch_messages(self, params: Dict) -> List[Dict]:
         """Fetch messages with pagination"""
         url = f'{self.base_url}/Messages.json'
-        auth = (self.account_sid, self.auth_token)
         all_messages = []
         params['PageSize'] = 100
         first_request = True
         
         while url:
-            # Only use params on first request; next_page_uri has filters built in
-            response = requests.get(url, auth=auth, params=params if first_request else None, verify=False)
+            response = self._make_request(url, params if first_request else None)
             first_request = False
             
             if response.status_code != 200:
-                auth_header = response.request.headers.get('Authorization', 'NOT SENT')
-                raise Exception(f"API Error: {response.status_code}\nURL: {url}\nAuth Header: {auth_header}\nAccount SID: {self.account_sid}\nToken Length: {len(self.auth_token)}\nResponse: {response.text}")
+                raise Exception(f"API Error: {response.status_code}\nResponse: {response.text}")
             
             data = response.json()
             for msg in data.get('messages', []):
@@ -268,6 +278,7 @@ class TwilioGUI:
         self.data_mode = tk.StringVar(value="calls")
         self.sort_reverse = {}  # Track sort direction per column
         self.tree_data = {}  # Store hidden data like sort_key for each tree item
+        self.all_data = []  # Store all fetched data for filtering
         
         self.setup_ui()
     
@@ -349,6 +360,16 @@ class TwilioGUI:
         ttk.Button(query_frame, text="Fetch Data", command=self.fetch_data).grid(row=4, column=1, pady=10)
         ttk.Button(query_frame, text="Export CSV", command=self.export_csv).grid(row=4, column=2, pady=10, padx=5)
         
+        # Search/Filter Section
+        filter_frame = ttk.Frame(main_frame)
+        filter_frame.grid(row=1, column=3, sticky=(tk.W, tk.E, tk.N), padx=(10, 0))
+        
+        ttk.Label(filter_frame, text="Filter:").pack()
+        self.filter_entry = ttk.Entry(filter_frame, width=20)
+        self.filter_entry.pack(pady=5)
+        self.filter_entry.bind('<KeyRelease>', self.filter_results)
+        ttk.Button(filter_frame, text="Clear Filter", command=self.clear_filter).pack()
+        
         # Results Section
         results_frame = ttk.LabelFrame(main_frame, text="Results (Double-click row for events)", padding="5")
         results_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
@@ -370,6 +391,15 @@ class TwilioGUI:
         
         # Bind double-click to show events
         self.tree.bind('<Double-Button-1>', self.show_call_message_events)
+        
+        # Bind right-click for copy menu
+        self.tree.bind('<Button-3>', self.show_context_menu)
+        
+        # Create context menu
+        self.context_menu = tk.Menu(self.tree, tearoff=0)
+        self.context_menu.add_command(label="Copy SID", command=lambda: self.copy_to_clipboard('sid'))
+        self.context_menu.add_command(label="Copy From Number", command=lambda: self.copy_to_clipboard('from'))
+        self.context_menu.add_command(label="Copy To Number", command=lambda: self.copy_to_clipboard('to'))
         
         # Status bar
         self.status_label = ttk.Label(main_frame, text="Ready", relief=tk.SUNKEN)
@@ -404,6 +434,11 @@ class TwilioGUI:
         results_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         main_frame.rowconfigure(1, weight=1)
         
+        # Progress bar
+        self.inactive_progress = ttk.Progressbar(results_frame, mode='determinate')
+        self.inactive_progress.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        self.inactive_progress.grid_remove()  # Hide initially
+        
         columns = ('Phone Number', 'Friendly Name', 'Calls', 'Messages', 'Total Activity')
         self.inactive_tree = ttk.Treeview(results_frame, columns=columns, show='headings', height=20)
         
@@ -414,8 +449,8 @@ class TwilioGUI:
         scrollbar = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.inactive_tree.yview)
         self.inactive_tree.configure(yscroll=scrollbar.set)
         
-        self.inactive_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.inactive_tree.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
         
         results_frame.columnconfigure(0, weight=1)
         results_frame.rowconfigure(0, weight=1)
@@ -544,6 +579,70 @@ class TwilioGUI:
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_tree_column(c))
             self.tree.column(col, width=150)
     
+    def show_context_menu(self, event):
+        """Show right-click context menu"""
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            self.context_menu.post(event.x_root, event.y_root)
+    
+    def copy_to_clipboard(self, field):
+        """Copy field value to clipboard"""
+        selection = self.tree.selection()
+        if not selection:
+            return
+        
+        item = self.tree.item(selection[0])
+        values = item['values']
+        
+        if field == 'sid':
+            value = values[-1]
+        elif field == 'from':
+            value = values[1]
+        elif field == 'to':
+            value = values[2]
+        else:
+            return
+        
+        self.root.clipboard_clear()
+        self.root.clipboard_append(value)
+        self.status_label.config(text=f"Copied {field}: {value}")
+    
+    def filter_results(self, event=None):
+        """Filter displayed results based on search text"""
+        search_text = self.filter_entry.get().lower()
+        
+        # Clear current display
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        self.tree_data.clear()
+        
+        # Re-populate with filtered data
+        mode = self.data_mode.get()
+        for item in self.all_data:
+            # Search in all visible fields
+            searchable = ' '.join(str(v).lower() for v in item.values() if v)
+            if search_text in searchable:
+                if mode == "calls":
+                    item_id = self.tree.insert('', tk.END, values=(
+                        item['direction'], item['from'], item['to'],
+                        item['start_time'], item['duration'], item['status'], item['sid']
+                    ))
+                else:
+                    item_id = self.tree.insert('', tk.END, values=(
+                        item['direction'], item['from'], item['to'],
+                        item['date_sent'], item['body'], item['status'], item['sid']
+                    ))
+                self.tree_data[item_id] = {'sort_key': item.get('sort_key', 0)}
+        
+        count = len(self.tree.get_children())
+        self.status_label.config(text=f"Showing {count} of {len(self.all_data)} {mode}")
+    
+    def clear_filter(self):
+        """Clear filter and show all results"""
+        self.filter_entry.delete(0, tk.END)
+        self.filter_results()
+    
     def sort_tree_column(self, col):
         """Sort tree contents when column header is clicked"""
         # Toggle sort direction for this column
@@ -631,6 +730,7 @@ class TwilioGUI:
             
             if mode == "calls":
                 data = api.get_calls(phone, start, end)
+                self.all_data = data  # Store for filtering
                 for item in data:
                     item_id = self.tree.insert('', tk.END, values=(
                         item['direction'], item['from'], item['to'],
@@ -639,6 +739,7 @@ class TwilioGUI:
                     self.tree_data[item_id] = {'sort_key': item.get('sort_key', 0)}
             else:
                 data = api.get_messages(phone, start, end)
+                self.all_data = data  # Store for filtering
                 for item in data:
                     item_id = self.tree.insert('', tk.END, values=(
                         item['direction'], item['from'], item['to'],
@@ -740,11 +841,17 @@ class TwilioGUI:
             # Get all phone numbers
             numbers = api.get_incoming_phone_numbers()
             self.inactive_status_label.config(text=f"Checking {len(numbers)} numbers for activity...")
+            
+            # Show and configure progress bar
+            self.inactive_progress.grid()
+            self.inactive_progress['maximum'] = len(numbers)
+            self.inactive_progress['value'] = 0
             self.root.update()
             
             inactive_count = 0
             for i, num in enumerate(numbers):
                 self.inactive_status_label.config(text=f"Checking {i+1}/{len(numbers)}: {num['phone_number']}")
+                self.inactive_progress['value'] = i + 1
                 self.root.update()
                 
                 activity = api.check_number_activity(num['phone_number'], days)
@@ -760,8 +867,10 @@ class TwilioGUI:
                     inactive_count += 1
             
             self.inactive_status_label.config(text=f"Found {inactive_count} inactive numbers (out of {len(numbers)} total)")
+            self.inactive_progress.grid_remove()  # Hide progress bar when done
             
         except Exception as e:
+            self.inactive_progress.grid_remove()
             self.show_error_dialog("Error Finding Inactive Numbers", str(e))
             self.inactive_status_label.config(text="Error")
     
