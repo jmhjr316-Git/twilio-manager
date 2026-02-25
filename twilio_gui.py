@@ -58,6 +58,33 @@ class TwilioAPI:
         self.timeout = 30
         self.max_retries = 3
     
+    def get_subaccounts(self) -> List[Dict]:
+        """Fetch all sub-accounts (and parent account) from Twilio"""
+        url = 'https://api.twilio.com/2010-04-01/Accounts.json'
+        all_accounts = []
+        
+        while url:
+            response = self._make_request(url)
+            if response.status_code != 200:
+                raise Exception(f"API Error: {response.status_code}\nResponse: {response.text}")
+            
+            data = response.json()
+            for acc in data.get('accounts', []):
+                if acc.get('status') == 'active':  # Only active accounts
+                    all_accounts.append({
+                        'friendly_name': acc.get('friendly_name', ''),
+                        'sid': acc['sid'],
+                        'auth_token': acc.get('auth_token', ''),
+                        'type': acc.get('type', ''),
+                        'owner_account_sid': acc.get('owner_account_sid', '')
+                    })
+            
+            url = data.get('next_page_uri')
+            if url:
+                url = f'https://api.twilio.com{url}'
+        
+        return all_accounts
+    
     def _make_request(self, url: str, params: Dict = None) -> requests.Response:
         """Make HTTP request with timeout and retry logic"""
         auth = (self.account_sid, self.auth_token)
@@ -284,6 +311,10 @@ class TwilioGUI:
         
         self.setup_ui()
         self.load_search_history()
+        
+        # Prompt for initial import if no accounts exist
+        if not self.config.accounts:
+            self.root.after(100, self.prompt_initial_import)
     
     def setup_ui(self):
         # Create notebook for tabs
@@ -306,6 +337,11 @@ class TwilioGUI:
         notebook.add(config_frame, text="Number Configuration")
         self.setup_config_tab(config_frame)
         
+        # Tab 4: Account Management
+        account_mgmt_frame = ttk.Frame(notebook)
+        notebook.add(account_mgmt_frame, text="Account Management")
+        self.setup_account_mgmt_tab(account_mgmt_frame)
+        
         # Refresh accounts after all tabs are created
         self.refresh_accounts()
     
@@ -314,6 +350,9 @@ class TwilioGUI:
         # Auto-load numbers for config tab if account is selected
         if hasattr(self, 'config_account_combo') and self.current_account.get():
             self.load_numbers_for_config()
+        # Refresh account list in account management tab
+        if hasattr(self, 'accounts_tree'):
+            self.refresh_account_list()
     
     def setup_lookup_tab(self, parent):
         # Main container
@@ -328,13 +367,23 @@ class TwilioGUI:
         account_frame = ttk.LabelFrame(main_frame, text="Account", padding="5")
         account_frame.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         
-        ttk.Label(account_frame, text="Select Account:").grid(row=0, column=0, padx=5)
-        self.account_combo = ttk.Combobox(account_frame, textvariable=self.current_account, width=20)
-        self.account_combo.grid(row=0, column=1, padx=5)
+        ttk.Label(account_frame, text="Select Account:").grid(row=0, column=0, padx=5, sticky=tk.W)
+        
+        # Search box
+        ttk.Label(account_frame, text="Search:").grid(row=0, column=1, padx=(20,5), sticky=tk.W)
+        self.lookup_account_search = ttk.Entry(account_frame, width=20)
+        self.lookup_account_search.grid(row=0, column=2, padx=5)
+        self.lookup_account_search.bind('<KeyRelease>', lambda e: self.filter_account_dropdown(self.account_combo, self.lookup_account_search, self.lookup_account_count))
+        
+        self.account_combo = ttk.Combobox(account_frame, textvariable=self.current_account, width=50, state='readonly')
+        self.account_combo.grid(row=0, column=3, padx=5)
         self.account_combo.bind('<<ComboboxSelected>>', self.on_account_changed)
         
-        ttk.Button(account_frame, text="Add Account", command=self.add_account_dialog).grid(row=0, column=2, padx=5)
-        ttk.Button(account_frame, text="Delete", command=self.delete_account).grid(row=0, column=3, padx=5)
+        self.lookup_account_count = ttk.Label(account_frame, text="", foreground="blue")
+        self.lookup_account_count.grid(row=0, column=4, padx=5)
+        
+        ttk.Button(account_frame, text="Add Account", command=self.add_account_dialog).grid(row=1, column=3, padx=5, pady=(5,0), sticky=tk.E)
+        ttk.Button(account_frame, text="Delete", command=self.delete_account).grid(row=1, column=4, padx=5, pady=(5,0), sticky=tk.W)
         
         # Query Section
         query_frame = ttk.LabelFrame(main_frame, text="Query Parameters", padding="5")
@@ -436,9 +485,19 @@ class TwilioGUI:
         account_frame = ttk.LabelFrame(main_frame, text="Account", padding="5")
         account_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         
-        ttk.Label(account_frame, text="Select Account:").grid(row=0, column=0, padx=5)
-        self.inactive_account_combo = ttk.Combobox(account_frame, textvariable=self.current_account, width=20)
-        self.inactive_account_combo.grid(row=0, column=1, padx=5)
+        ttk.Label(account_frame, text="Select Account:").grid(row=0, column=0, padx=5, sticky=tk.W)
+        
+        # Search box
+        ttk.Label(account_frame, text="Search:").grid(row=0, column=1, padx=(20,5), sticky=tk.W)
+        self.inactive_account_search = ttk.Entry(account_frame, width=20)
+        self.inactive_account_search.grid(row=0, column=2, padx=5)
+        self.inactive_account_search.bind('<KeyRelease>', lambda e: self.filter_account_dropdown(self.inactive_account_combo, self.inactive_account_search, self.inactive_account_count))
+        
+        self.inactive_account_combo = ttk.Combobox(account_frame, textvariable=self.current_account, width=50, state='readonly')
+        self.inactive_account_combo.grid(row=0, column=3, padx=5)
+        
+        self.inactive_account_count = ttk.Label(account_frame, text="", foreground="blue")
+        self.inactive_account_count.grid(row=0, column=4, padx=5)
         
         ttk.Label(account_frame, text="Inactive Days:").grid(row=0, column=2, padx=5)
         self.inactive_days = ttk.Spinbox(account_frame, from_=1, to=365, width=10)
@@ -490,10 +549,20 @@ class TwilioGUI:
         select_frame = ttk.LabelFrame(main_frame, text="Select Number", padding="5")
         select_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         
-        ttk.Label(select_frame, text="Account:").grid(row=0, column=0, padx=5, pady=5)
-        self.config_account_combo = ttk.Combobox(select_frame, textvariable=self.current_account, width=20)
-        self.config_account_combo.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(select_frame, text="Select Account:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        
+        # Search box
+        ttk.Label(select_frame, text="Search:").grid(row=0, column=1, padx=(20,5), pady=5, sticky=tk.W)
+        self.config_account_search = ttk.Entry(select_frame, width=20)
+        self.config_account_search.grid(row=0, column=2, padx=5, pady=5)
+        self.config_account_search.bind('<KeyRelease>', lambda e: self.filter_account_dropdown(self.config_account_combo, self.config_account_search, self.config_account_count))
+        
+        self.config_account_combo = ttk.Combobox(select_frame, textvariable=self.current_account, width=50, state='readonly')
+        self.config_account_combo.grid(row=0, column=3, padx=5, pady=5)
         self.config_account_combo.bind('<<ComboboxSelected>>', self.load_numbers_for_config)
+        
+        self.config_account_count = ttk.Label(select_frame, text="", foreground="blue")
+        self.config_account_count.grid(row=0, column=4, padx=5, pady=5)
         
         ttk.Label(select_frame, text="Phone Number:").grid(row=0, column=2, padx=5, pady=5)
         self.config_number_combo = ttk.Combobox(select_frame, width=20)
@@ -520,6 +589,77 @@ class TwilioGUI:
         # Status
         self.config_status_label = ttk.Label(main_frame, text="Ready", relief=tk.SUNKEN)
         self.config_status_label.grid(row=2, column=0, sticky=(tk.W, tk.E))
+    
+    def setup_account_mgmt_tab(self, parent):
+        main_frame = ttk.Frame(parent, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        
+        # Import Section
+        import_frame = ttk.LabelFrame(main_frame, text="Import Accounts from Twilio", padding="5")
+        import_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        ttk.Label(import_frame, text="Parent Account SID:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        self.import_sid_entry = ttk.Entry(import_frame, width=40)
+        self.import_sid_entry.grid(row=0, column=1, padx=5, pady=5)
+        
+        ttk.Label(import_frame, text="Parent Auth Token:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        self.import_token_entry = ttk.Entry(import_frame, width=40, show="*")
+        self.import_token_entry.grid(row=1, column=1, padx=5, pady=5)
+        
+        ttk.Button(import_frame, text="Fetch Accounts", command=self.fetch_accounts_for_import).grid(row=0, column=2, rowspan=2, padx=5)
+        ttk.Button(import_frame, text="Import Selected", command=self.import_selected_accounts).grid(row=0, column=3, rowspan=2, padx=5)
+        
+        # Fetched accounts list
+        fetch_frame = ttk.LabelFrame(main_frame, text="Available Accounts (Select to Import)", padding="5")
+        fetch_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        main_frame.rowconfigure(1, weight=1)
+        
+        columns = ('Name', 'SID', 'Type')
+        self.import_tree = ttk.Treeview(fetch_frame, columns=columns, show='headings', height=8)
+        for col in columns:
+            self.import_tree.heading(col, text=col)
+            self.import_tree.column(col, width=200)
+        
+        import_scroll = ttk.Scrollbar(fetch_frame, orient=tk.VERTICAL, command=self.import_tree.yview)
+        self.import_tree.configure(yscroll=import_scroll.set)
+        self.import_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        import_scroll.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        fetch_frame.columnconfigure(0, weight=1)
+        fetch_frame.rowconfigure(0, weight=1)
+        
+        # Current accounts list
+        current_frame = ttk.LabelFrame(main_frame, text="Current Accounts", padding="5")
+        current_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        main_frame.rowconfigure(2, weight=1)
+        
+        # Search box
+        search_frame = ttk.Frame(current_frame)
+        search_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=5)
+        self.account_search_entry = ttk.Entry(search_frame, width=40)
+        self.account_search_entry.pack(side=tk.LEFT, padx=5)
+        self.account_search_entry.bind('<KeyRelease>', self.filter_accounts)
+        ttk.Button(search_frame, text="Delete Selected", command=self.delete_selected_accounts).pack(side=tk.RIGHT, padx=5)
+        
+        columns = ('Name', 'SID')
+        self.accounts_tree = ttk.Treeview(current_frame, columns=columns, show='headings', height=10)
+        for col in columns:
+            self.accounts_tree.heading(col, text=col)
+            self.accounts_tree.column(col, width=250)
+        
+        accounts_scroll = ttk.Scrollbar(current_frame, orient=tk.VERTICAL, command=self.accounts_tree.yview)
+        self.accounts_tree.configure(yscroll=accounts_scroll.set)
+        self.accounts_tree.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        accounts_scroll.grid(row=1, column=1, sticky=(tk.N, tk.S))
+        current_frame.columnconfigure(0, weight=1)
+        current_frame.rowconfigure(1, weight=1)
+        
+        # Status
+        self.account_mgmt_status = ttk.Label(main_frame, text="Ready", relief=tk.SUNKEN)
+        self.account_mgmt_status.grid(row=3, column=0, sticky=(tk.W, tk.E))
     
     def create_tooltip(self, widget, text):
         """Create a tooltip for a widget"""
@@ -599,6 +739,9 @@ class TwilioGUI:
     
     def refresh_accounts(self):
         accounts = list(self.config.accounts.keys())
+        # Sort accounts alphabetically for easier browsing
+        accounts.sort()
+        self.all_accounts = accounts  # Store for filtering
         self.account_combo['values'] = accounts
         if hasattr(self, 'inactive_account_combo'):
             self.inactive_account_combo['values'] = accounts
@@ -1207,6 +1350,218 @@ class TwilioGUI:
             text_widget.insert(tk.END, f"Error loading events:\n\n{str(e)}")
         
         ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
+    
+    def fetch_accounts_for_import(self):
+        """Fetch accounts from Twilio API for import"""
+        sid = self.import_sid_entry.get().strip()
+        token = self.import_token_entry.get().strip()
+        
+        if not sid or not token:
+            messagebox.showerror("Error", "Please enter both Account SID and Auth Token")
+            return
+        
+        # Clear previous results
+        for item in self.import_tree.get_children():
+            self.import_tree.delete(item)
+        
+        self.account_mgmt_status.config(text="Fetching accounts from Twilio...")
+        self.root.update()
+        
+        try:
+            api = TwilioAPI(sid, token)
+            accounts = api.get_subaccounts()
+            
+            # Store fetched accounts for import
+            self.fetched_accounts = {}
+            
+            for acc in accounts:
+                name = acc['friendly_name'] or acc['sid']
+                item_id = self.import_tree.insert('', tk.END, values=(
+                    name, acc['sid'], acc['type']
+                ))
+                self.fetched_accounts[item_id] = acc
+            
+            self.account_mgmt_status.config(text=f"Found {len(accounts)} accounts")
+            
+        except Exception as e:
+            self.show_error_dialog("Failed to fetch accounts", str(e))
+            self.account_mgmt_status.config(text="Error")
+    
+    def import_selected_accounts(self):
+        """Import selected accounts from the fetched list"""
+        selection = self.import_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select accounts to import")
+            return
+        
+        imported = 0
+        skipped = 0
+        
+        # Get existing SIDs
+        existing_sids = {details['account_sid'] for details in self.config.accounts.values()}
+        
+        for item_id in selection:
+            if item_id in self.fetched_accounts:
+                acc = self.fetched_accounts[item_id]
+                
+                # Check if SID already exists
+                if acc['sid'] in existing_sids:
+                    skipped += 1
+                    continue
+                
+                name = acc['friendly_name'] or acc['sid']
+                self.config.add_account(name, acc['sid'], acc['auth_token'])
+                imported += 1
+        
+        self.refresh_accounts()
+        self.refresh_account_list()
+        
+        msg = f"Imported {imported} account(s)"
+        if skipped > 0:
+            msg += f" ({skipped} skipped - already exist)"
+        messagebox.showinfo("Import Complete", msg)
+        self.account_mgmt_status.config(text=msg)
+    
+    def refresh_account_list(self):
+        """Refresh the current accounts list in account management tab"""
+        if not hasattr(self, 'accounts_tree'):
+            return
+        
+        for item in self.accounts_tree.get_children():
+            self.accounts_tree.delete(item)
+        
+        search_text = self.account_search_entry.get().lower() if hasattr(self, 'account_search_entry') else ''
+        
+        for name, details in self.config.accounts.items():
+            # Only search name, not SID
+            if search_text and search_text not in name.lower():
+                continue
+            self.accounts_tree.insert('', tk.END, values=(name, details['account_sid']))
+    
+    def filter_accounts(self, event=None):
+        """Filter accounts list based on search text"""
+        self.refresh_account_list()
+    
+    def delete_selected_accounts(self):
+        """Delete selected accounts from current accounts list"""
+        selection = self.accounts_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select accounts to delete")
+            return
+        
+        count = len(selection)
+        if not messagebox.askyesno("Confirm Delete", f"Delete {count} account(s)?"):
+            return
+        
+        for item_id in selection:
+            values = self.accounts_tree.item(item_id)['values']
+            account_name = values[0]
+            self.config.delete_account(account_name)
+        
+        self.refresh_accounts()
+        self.refresh_account_list()
+        messagebox.showinfo("Success", f"Deleted {count} account(s)")
+        self.account_mgmt_status.config(text=f"Deleted {count} account(s)")
+    
+    def prompt_initial_import(self):
+        """Prompt user to import accounts on first run"""
+        response = messagebox.askyesno(
+            "Welcome to Twilio Manager",
+            "No accounts found. Would you like to import accounts from Twilio now?\n\n" +
+            "You'll need your parent Account SID and Auth Token.",
+            icon='question'
+        )
+        
+        if response:
+            # Switch to Account Management tab and show import dialog
+            self.root.after(100, self.show_import_dialog)
+    
+    def show_import_dialog(self):
+        """Show dialog to import accounts"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Import Accounts from Twilio")
+        dialog.geometry("450x150")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        ttk.Label(dialog, text="Parent Account SID:").grid(row=0, column=0, padx=10, pady=10, sticky=tk.W)
+        sid_entry = ttk.Entry(dialog, width=40)
+        sid_entry.grid(row=0, column=1, padx=10, pady=10)
+        
+        ttk.Label(dialog, text="Parent Auth Token:").grid(row=1, column=0, padx=10, pady=10, sticky=tk.W)
+        token_entry = ttk.Entry(dialog, width=40, show="*")
+        token_entry.grid(row=1, column=1, padx=10, pady=10)
+        
+        def do_import():
+            sid = sid_entry.get().strip()
+            token = token_entry.get().strip()
+            
+            if not sid or not token:
+                messagebox.showerror("Error", "Please enter both Account SID and Auth Token")
+                return
+            
+            dialog.destroy()
+            
+            try:
+                api = TwilioAPI(sid, token)
+                accounts = api.get_subaccounts()
+                
+                # Get existing SIDs
+                existing_sids = {details['account_sid'] for details in self.config.accounts.values()}
+                
+                imported = 0
+                for acc in accounts:
+                    if acc['sid'] not in existing_sids:
+                        name = acc['friendly_name'] or acc['sid']
+                        self.config.add_account(name, acc['sid'], acc['auth_token'])
+                        imported += 1
+                
+                self.refresh_accounts()
+                messagebox.showinfo("Import Complete", f"Imported {imported} account(s)")
+                
+            except Exception as e:
+                self.show_error_dialog("Failed to import accounts", str(e))
+        
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.grid(row=2, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Import All", command=do_import).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+    
+    def filter_account_dropdown(self, combo, search_entry, count_label=None):
+        """Filter account dropdown based on search box"""
+        typed = search_entry.get().lower()
+        if not typed:
+            combo['values'] = self.all_accounts
+            if count_label:
+                count_label.config(text="")
+        else:
+            filtered = [acc for acc in self.all_accounts if typed in acc.lower()]
+            combo['values'] = filtered
+            if count_label:
+                count_label.config(text=f"({len(filtered)} matches)")
+            # Set first match as current selection
+            if filtered and combo.get() not in filtered:
+                combo.set(filtered[0])
+    
+    def filter_inactive_account_dropdown(self, event=None):
+        """Filter inactive account dropdown as user types"""
+        typed = self.inactive_account_combo.get().lower()
+        if not typed:
+            self.inactive_account_combo['values'] = self.all_accounts
+            return
+        
+        filtered = [acc for acc in self.all_accounts if typed in acc.lower()]
+        self.inactive_account_combo['values'] = filtered
+    
+    def filter_config_account_dropdown(self, event=None):
+        """Filter config account dropdown as user types"""
+        typed = self.config_account_combo.get().lower()
+        if not typed:
+            self.config_account_combo['values'] = self.all_accounts
+            return
+        
+        filtered = [acc for acc in self.all_accounts if typed in acc.lower()]
+        self.config_account_combo['values'] = filtered
 
 def main():
     root = tk.Tk()
